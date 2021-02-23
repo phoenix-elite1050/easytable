@@ -1,5 +1,6 @@
 package org.vandeseer.easytable;
 
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.experimental.Accessors;
@@ -54,7 +55,14 @@ public class TableDrawer {
     @Accessors(chain = true, fluent = true)
     protected boolean compress;
 
+    @Getter
+    protected PDPage tableStartPage;
+
+    @Getter(AccessLevel.NONE)
+    protected boolean startTableInNewPage;
+
     protected final List<BiConsumer<Drawer, DrawingContext>> drawerList = new LinkedList<>();
+
     {
         this.drawerList.add((drawer, drawingContext) -> {
             drawer.drawBackground(drawingContext);
@@ -80,11 +88,11 @@ public class TableDrawer {
 
     protected void drawPage(PageData pageData) {
         drawerList.forEach(drawer ->
-            drawWithFunction(pageData, new Point2D.Float(this.startX, this.startY), drawer)
+                drawWithFunction(pageData, new Point2D.Float(this.startX, this.startY), drawer)
         );
     }
 
-    private Queue<PageData> computeRowsOnPagesWithNewPageStartOf(float yOffsetOnNewPage) {
+    protected Queue<PageData> computeRowsOnPagesWithNewPageStartOf(float yOffsetOnNewPage) {
         final Queue<PageData> dataForPages = new LinkedList<>();
 
         float y = startY;
@@ -117,21 +125,30 @@ public class TableDrawer {
         return row.getHeight() > (yOffsetOnNewPage - endY);
     }
 
+    protected void determinePageToStartTable(float yOffsetOnNewPage) {
+        if (startY - table.getRows().get(0).getHeight() < endY) {
+            startY = yOffsetOnNewPage;
+            startTableInNewPage = true;
+        }
+    }
+
     public void draw(Supplier<PDDocument> documentSupplier, Supplier<PDPage> pageSupplier, float yOffset) throws IOException {
         final PDDocument document = documentSupplier.get();
 
         // We create one throwaway page to be able to calculate the page data upfront
         float startOnNewPage = pageSupplier.get().getMediaBox().getHeight() - yOffset;
+        determinePageToStartTable(startOnNewPage);
         final Queue<PageData> pageDataQueue = computeRowsOnPagesWithNewPageStartOf(startOnNewPage);
 
         for (int i = 0; !pageDataQueue.isEmpty(); i++) {
-            final PDPage pageToDrawOn;
+            final PDPage pageToDrawOn = determinePageToDraw(i, document, pageSupplier);
 
-            if (i > 0 || document.getNumberOfPages() == 0) {
-                pageToDrawOn = pageSupplier.get();
-                document.addPage(pageToDrawOn);
-            } else {
-                pageToDrawOn = document.getPage(document.getNumberOfPages() - 1);
+            if ((i == 0 && startTableInNewPage) || i > 0 || document.getNumberOfPages() == 0) {
+                startTableInNewPage = false;
+            }
+
+            if (i == 0) {
+                tableStartPage = pageToDrawOn;
             }
 
             try (final PDPageContentStream newPageContentStream = new PDPageContentStream(document, pageToDrawOn, APPEND, compress)) {
@@ -142,6 +159,19 @@ public class TableDrawer {
 
             startY(pageToDrawOn.getMediaBox().getHeight() - yOffset);
         }
+    }
+
+    protected PDPage determinePageToDraw(int index, PDDocument document, Supplier<PDPage> pageSupplier) {
+        final PDPage pageToDrawOn;
+
+        if ((index == 0 && startTableInNewPage) || index > 0 || document.getNumberOfPages() == 0) {
+            pageToDrawOn = pageSupplier.get();
+            document.addPage(pageToDrawOn);
+        } else {
+            pageToDrawOn = document.getPage(document.getNumberOfPages() - 1);
+        }
+
+        return pageToDrawOn;
     }
 
     protected void drawWithFunction(PageData pageData, Point2D.Float startingPoint, BiConsumer<Drawer, DrawingContext> consumer) {
